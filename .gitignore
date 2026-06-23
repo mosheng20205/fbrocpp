@@ -1,0 +1,33 @@
+# Build outputs
+build/
+out/
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# Runtime and local logs
+*.log
+CacheData/
+
+# FBro/CEF dependencies are intentionally not committed.
+# Copy official FBro files into third_party/fbro locally.
+third_party/fbro/
+**/deps/
+deps.zip
+*.zip
+
+# Binaries and debug artifacts
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.exp
+
+# Local secrets
+.env
+.env.*
+!.env.example

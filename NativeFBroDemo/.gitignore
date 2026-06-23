@@ -1,0 +1,36 @@
+# Build outputs
+/build/
+/out/
+/.vs/
+
+# Large FBro/CEF dependency package.
+# Download deps.zip from GitHub Releases and extract it to ./deps.
+/deps/
+/deps.zip
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# Visual Studio user files
+*.user
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+
+# Debug/runtime generated files
+*.pdb
+*.ilk
+*.obj
+*.log
+CacheData/
+
+# Local secrets
+/.env
+/.env.*

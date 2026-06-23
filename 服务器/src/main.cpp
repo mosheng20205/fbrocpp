@@ -1,42 +1,38 @@
 #include "pch.h"
 
 #include "FBroBaseType.h"
+#include "FBroBrowser.h"
 #include "FBroBrowserHost.h"
 #include "FBroControl.h"
-#include "FBroCookieManager.h"
+#include "FBroFrame.h"
 #include "FBroHsEvent.h"
 #include "FBroInit.h"
-#include "FBroRequestContext.h"
+#include "FBroServer.h"
 
-#include <algorithm>
 #include <array>
 #include <clocale>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <string>
-#include <vector>
 
 namespace {
 
-constexpr wchar_t kMainWindowClass[] = L"CookieSettingsDemo.MainWindow";
-constexpr int kToolbarHeight = 196;
-constexpr int kButtonCookieUrl = 1001;
-constexpr int kButtonCookieGlobalGet = 1002;
-constexpr int kButtonCookieGlobalSet = 1003;
-constexpr int kButtonCookieBrowserGet = 1004;
-constexpr int kButtonCookieBrowserSet = 1005;
-constexpr int kButtonCookieDelete = 1006;
+constexpr wchar_t kMainWindowClass[] = L"ServerDemo.MainWindow";
+constexpr int kButtonCreateServer = 1001;
+constexpr int kToolbarHeight = 56;
+constexpr int kServerPort = 8888;
 constexpr UINT kMsgMaybeDestroy = WM_APP + 301;
 constexpr UINT_PTR kCloseFallbackTimer = 401;
 constexpr UINT kCloseFallbackMs = 5000;
 
 HWND g_main_window = nullptr;
+HWND g_create_server_button = nullptr;
 HWND g_browser_host = nullptr;
 CefRefPtr<CefBrowser> g_browser;
-std::vector<HWND> g_buttons;
-std::vector<CefRefPtr<FBroHsCookieVisitor>> g_cookie_visitors;
+CefRefPtr<CefServer> g_server;
+CefRefPtr<FBroHsServerHandle> g_server_handler;
 bool g_fbro_ready = false;
+bool g_server_create_requested = false;
 bool g_close_requested = false;
 bool g_destroying_window = false;
 bool g_fbro_shutdown_started = false;
@@ -68,30 +64,19 @@ std::string ToUtf8(const std::wstring& value) {
     return result;
 }
 
-std::wstring FromUtf8(const char* value) {
-    if (!value || value[0] == '\0') return {};
-    const int len = static_cast<int>(strlen(value));
-    const int size = MultiByteToWideChar(CP_UTF8, 0, value, len, nullptr, 0);
-    if (size <= 0) {
-        const int ansi_size = MultiByteToWideChar(CP_ACP, 0, value, len, nullptr, 0);
-        std::wstring ansi_result(ansi_size, L'\0');
-        MultiByteToWideChar(CP_ACP, 0, value, len, ansi_result.data(), ansi_size);
-        return ansi_result;
-    }
-    std::wstring result(size, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value, len, result.data(), size);
-    return result;
+std::wstring FromCefString(const CefString& value) {
+    return value.ToWString();
 }
 
 void LogLine(const std::wstring& message) {
     OutputDebugStringW((message + L"\n").c_str());
-    std::ofstream out(ExeDir() / L"cookie-settings-demo.log",
+    std::ofstream out(ExeDir() / L"server-demo.log",
         std::ios::app | std::ios::binary);
     out << ToUtf8(message) << "\n";
 }
 
 bool HasLiveResources() {
-    return g_browser != nullptr;
+    return g_browser != nullptr || g_server != nullptr || g_server_create_requested;
 }
 
 void MaybeDestroyAfterClose() {
@@ -116,6 +101,11 @@ void RequestAppClose(HWND hwnd) {
     g_close_requested = true;
     ShowWindow(hwnd, SW_HIDE);
     SetTimer(hwnd, kCloseFallbackTimer, kCloseFallbackMs, nullptr);
+    if (g_server) {
+        FBroHsServer_Shutdown(g_server);
+    } else {
+        g_server_create_requested = false;
+    }
     if (g_browser) {
         FBroHsBrowserHost_CloseBrowser(g_browser, true);
     }
@@ -129,192 +119,23 @@ void RequestAppClose(HWND hwnd) {
 void Notify(const std::wstring& text) {
     LogLine(text);
     MessageBoxW(g_main_window, text.c_str(),
-        L"Cookie\u8bbe\u7f6e\u53d6\u51fa", MB_ICONINFORMATION);
-}
-
-std::wstring CookieToText(POINT_COOKIEDATA cookie) {
-    if (!cookie) return L"<null cookie>";
-    std::wstringstream stream;
-    stream << FromUtf8(cookie->name) << L"=" << FromUtf8(cookie->value)
-           << L"; domain=" << FromUtf8(cookie->domain)
-           << L"; path=" << FromUtf8(cookie->path)
-           << L"; httpOnly=" << cookie->httponly
-           << L"; secure=" << cookie->secure;
-    return stream.str();
-}
-
-class CookieVisitor final : public FBroHsCookieVisitor {
-public:
-    explicit CookieVisitor(std::wstring title) : title_(std::move(title)) {}
-
-    void Start() override {
-        items_.clear();
-        LogLine(title_ + L": visit start.");
-    }
-
-    bool Visit(POINT_COOKIEDATA cookie, int count, int total, bool&) override {
-        std::wstringstream stream;
-        stream << L"[" << (count + 1) << L"/" << total << L"] "
-               << CookieToText(cookie);
-        items_.push_back(stream.str());
-        LogLine(title_ + L": " + stream.str());
-        return true;
-    }
-
-    void End() override {
-        std::wstringstream stream;
-        stream << title_ << L": visit end, count=" << items_.size();
-        if (!items_.empty()) {
-            stream << L"\n\n";
-            const size_t max_items = std::min<size_t>(items_.size(), 12);
-            for (size_t i = 0; i < max_items; ++i) {
-                stream << items_[i] << L"\n";
-            }
-            if (items_.size() > max_items) {
-                stream << L"...";
-            }
-        }
-        Notify(stream.str());
-    }
-
-private:
-    std::wstring title_;
-    std::vector<std::wstring> items_;
-
-    IMPLEMENT_REFCOUNTING(CookieVisitor);
-};
-
-CefRefPtr<CefCookieManager> GlobalCookieManager() {
-    return FBroHsCookieManager_GetGlobalManager();
-}
-
-CefRefPtr<CefCookieManager> BrowserCookieManager() {
-    if (!g_browser) return nullptr;
-    auto context = FBroHsBrowserHost_GetRequestContext(g_browser);
-    if (!context) return nullptr;
-    return FBroHsRequestContext_GetCookieManager(context);
-}
-
-void KeepVisitor(CefRefPtr<CookieVisitor> visitor) {
-    g_cookie_visitors.push_back(visitor);
-}
-
-void VisitUrlCookie() {
-    auto manager = GlobalCookieManager();
-    CefRefPtr<CookieVisitor> visitor = new CookieVisitor(L"\u53d6Cookie_url");
-    KeepVisitor(visitor);
-    const BOOL ok = FBroHsCookieManager_VisitUrlCookies(
-        manager, CefString("http://www.baidu.com/"), TRUE, visitor);
-    LogLine(L"\u53d6Cookie_url submitted=" + std::to_wstring(ok));
-}
-
-void VisitGlobalCookie() {
-    auto manager = GlobalCookieManager();
-    CefRefPtr<CookieVisitor> visitor = new CookieVisitor(L"\u53d6Cookie_\u5168\u5c40");
-    KeepVisitor(visitor);
-    const BOOL ok = FBroHsCookieManager_VisitAllCookies(manager, visitor);
-    LogLine(L"\u53d6Cookie_\u5168\u5c40 submitted=" + std::to_wstring(ok));
-}
-
-void SetCookieOn(CefRefPtr<CefCookieManager> manager, const std::wstring& title) {
-    if (!manager) {
-        Notify(title + L": CookieManager is null.");
-        return;
-    }
-
-    std::string name = "fbro_demo_cookie";
-    std::string value = "global-or-browser-cookie";
-    std::string domain = ".baidu.com";
-    std::string path = "/";
-
-    E_COOKIEDATA data{};
-    data.name = name.data();
-    data.value = value.data();
-    data.domain = domain.data();
-    data.path = path.data();
-    data.httponly = FALSE;
-    data.has_expires = FALSE;
-    data.secure = 0;
-    data.same_site = 0;
-    data.priority = 0;
-
-    const BOOL ok = FBroHsCookieManager_SetCookie(
-        manager, CefString("http://www.baidu.com"), &data);
-    FBroHsCookieManager_FlushStore(manager);
-    Notify(title + L": SetCookie result=" + std::to_wstring(ok) +
-        L"\nname=fbro_demo_cookie\nvalue=global-or-browser-cookie");
-}
-
-void VisitBrowserCookie() {
-    auto manager = BrowserCookieManager();
-    if (!manager) {
-        Notify(L"\u53d6Cookie: browser cookie manager is null.");
-        return;
-    }
-    CefRefPtr<CookieVisitor> visitor = new CookieVisitor(L"\u53d6Cookie");
-    KeepVisitor(visitor);
-    const BOOL ok = FBroHsCookieManager_VisitAllCookies(manager, visitor);
-    LogLine(L"\u53d6Cookie submitted=" + std::to_wstring(ok));
-}
-
-void DeleteCookie() {
-    auto global_manager = GlobalCookieManager();
-    auto browser_manager = BrowserCookieManager();
-    const BOOL ok_global = FBroHsCookieManager_DeleteCookies(
-        global_manager, CefString(""), CefString(""));
-    BOOL ok_browser = FALSE;
-    if (browser_manager) {
-        ok_browser = FBroHsCookieManager_DeleteCookies(
-            browser_manager, CefString(""), CefString(""));
-        FBroHsCookieManager_FlushStore(browser_manager);
-    }
-    FBroHsCookieManager_FlushStore(global_manager);
-    Notify(L"\u5220\u9664Cookie: global=" + std::to_wstring(ok_global) +
-        L", browser=" + std::to_wstring(ok_browser));
-}
-
-void HandleAction(int id) {
-    switch (id) {
-    case kButtonCookieUrl:
-        VisitUrlCookie();
-        break;
-    case kButtonCookieGlobalGet:
-        VisitGlobalCookie();
-        break;
-    case kButtonCookieGlobalSet:
-        SetCookieOn(GlobalCookieManager(), L"\u7f6eCookie_\u5168\u5c40");
-        break;
-    case kButtonCookieBrowserGet:
-        VisitBrowserCookie();
-        break;
-    case kButtonCookieBrowserSet:
-        SetCookieOn(BrowserCookieManager(), L"\u7f6eCookie");
-        break;
-    case kButtonCookieDelete:
-        DeleteCookie();
-        break;
-    }
+        L"\u670d\u52a1\u5668", MB_ICONINFORMATION);
 }
 
 void LayoutChildren() {
     if (!g_main_window) return;
+
     RECT rc{};
     GetClientRect(g_main_window, &rc);
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
 
-    const int button_width = 180;
-    const int button_height = 28;
-    const int x = 16;
-    int y = 12;
-    for (HWND button : g_buttons) {
-        MoveWindow(button, x, y, button_width, button_height, TRUE);
-        y += 30;
+    if (g_create_server_button) {
+        MoveWindow(g_create_server_button, 16, 12, 140, 32, TRUE);
     }
-
     if (g_browser_host) {
-        MoveWindow(g_browser_host, 220, 0,
-            max(1, rc.right - 220),
-            max(1, rc.bottom - rc.top),
-            TRUE);
+        MoveWindow(g_browser_host, 0, kToolbarHeight, width,
+            max(1, height - kToolbarHeight), TRUE);
     }
     if (g_browser) {
         HWND browser_hwnd = FBroHsBrowserHost_GetWindowHandle(g_browser);
@@ -329,12 +150,115 @@ void LayoutChildren() {
     }
 }
 
+class ServerEvent final : public FBroHsServerHandle {
+public:
+    ServerEvent() {
+        type_ = ServerHandleType;
+    }
+
+    static void* operator new(size_t size) {
+        return FBroMallocManger_New(size);
+    }
+
+    static void operator delete(void* ptr) noexcept {
+        if (ptr) {
+            FBroMallocManger_Free(ptr);
+        }
+    }
+
+    void OnServerCreated(CefRefPtr<CefServer> server) override {
+        g_server = server;
+        LogLine(L"\u670d\u52a1\u5668\u521b\u5efa\u6210\u529f: 127.0.0.1:" +
+            std::to_wstring(kServerPort));
+    }
+
+    void OnServerDestroyed(CefRefPtr<CefServer>) override {
+        LogLine(L"Server destroyed.");
+        g_server = nullptr;
+        g_server_create_requested = false;
+        if (g_main_window) {
+            PostMessageW(g_main_window, kMsgMaybeDestroy, 0, 0);
+        }
+    }
+
+    void OnClientConnected(CefRefPtr<CefServer>, int connection_id) override {
+        LogLine(L"Client connected: " + std::to_wstring(connection_id));
+    }
+
+    void OnClientDisconnected(CefRefPtr<CefServer>, int connection_id) override {
+        LogLine(L"Client disconnected: " + std::to_wstring(connection_id));
+    }
+
+    void OnHttpRequest(CefRefPtr<CefServer> server,
+                       int connection_id,
+                       const CefString& client_address,
+                       CefRefPtr<CefRequest>) override {
+        LogLine(L"HTTP request from " + FromCefString(client_address) +
+            L", connection=" + std::to_wstring(connection_id));
+        static const char body[] =
+            "<!doctype html><meta charset=\"utf-8\">"
+            "<title>FBro ServerDemo</title>"
+            "<body>FBro native C++ server is running.</body>";
+        FBroHsServer_SendHttp200Response(server, connection_id,
+            CefString("text/html; charset=utf-8"), body,
+            static_cast<int>(sizeof(body) - 1));
+    }
+
+    void OnWebSocketRequest(CefRefPtr<CefServer>,
+                            int connection_id,
+                            const CefString& client_address,
+                            CefRefPtr<CefRequest>,
+                            CefRefPtr<CefCallback>) override {
+        LogLine(L"WebSocket request from " + FromCefString(client_address) +
+            L", connection=" + std::to_wstring(connection_id));
+    }
+
+    void OnWebSocketConnected(CefRefPtr<CefServer>, int connection_id) override {
+        LogLine(L"WebSocket connected: " + std::to_wstring(connection_id));
+    }
+
+    void OnWebSocketMessage(CefRefPtr<CefServer> server,
+                            int connection_id,
+                            const void* data,
+                            size_t data_size) override {
+        LogLine(L"WebSocket message: connection=" +
+            std::to_wstring(connection_id) + L", size=" +
+            std::to_wstring(data_size));
+        if (server && data && data_size > 0) {
+            FBroHsServer_SendWebSocketMessage(server, connection_id, data,
+                static_cast<int>(data_size));
+        }
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ServerEvent);
+};
+
+void CreateServer() {
+    if (!g_fbro_ready) {
+        Notify(L"FBro is not ready.");
+        return;
+    }
+    if (g_server_create_requested || (g_server && FBroHsServer_IsRunning(g_server))) {
+        Notify(L"\u670d\u52a1\u5668\u5df2\u5728\u8fd0\u884c: 127.0.0.1:" +
+            std::to_wstring(kServerPort));
+        return;
+    }
+
+    g_server_create_requested = true;
+    g_server_handler = new ServerEvent();
+    FBroHsServer_CreateServer(CefString("127.0.0.1"), kServerPort, 100,
+        g_server_handler);
+    LogLine(L"Create server submitted: 127.0.0.1:" +
+        std::to_wstring(kServerPort));
+}
+
 class BrowserEvent final : public FBroHsBroEvent {
 public:
     void OnAfterCreated(CefRefPtr<CefBrowser> browser,
                         CefRefPtr<CefDictionaryValue>) override {
         g_browser = browser;
-        LogLine(L"Embedded Baidu browser created.");
+        LogLine(L"Embedded chat-test browser created.");
         LayoutChildren();
     }
 
@@ -351,7 +275,7 @@ public:
                    CefRefPtr<CefFrame> frame,
                    int http_status_code) override {
         if (frame && frame->IsMain()) {
-            LogLine(L"Baidu page load ended, status=" +
+            LogLine(L"Chat-test page load ended, status=" +
                 std::to_wstring(http_status_code));
         }
     }
@@ -360,7 +284,7 @@ private:
     IMPLEMENT_REFCOUNTING(BrowserEvent);
 };
 
-void CreateEmbeddedBaiduBrowser() {
+void CreateEmbeddedBrowser() {
     if (!g_fbro_ready || !g_browser_host || g_browser) return;
 
     RECT rc{};
@@ -385,11 +309,11 @@ void CreateEmbeddedBaiduBrowser() {
 
     CefRefPtr<BrowserEvent> event = new BrowserEvent();
     CefRefPtr<CefDictionaryValue> extra = CefDictionaryValue::Create();
-    extra->SetString("flag", "CookieSettingsDemo");
+    extra->SetString("flag", "ServerDemo");
 
-    const BOOL ok = FBroHsCreate(CefString("https://www.baidu.com"),
+    const BOOL ok = FBroHsCreate(CefString("http://coolaf.com/tool/chattest"),
         &window_info, &browser_setting, nullptr, extra, event, nullptr,
-        CefString("CookieSettingsDemo"));
+        CefString("ServerDemo"));
     if (!ok) {
         LogLine(L"FBroHsCreate failed.");
     }
@@ -400,41 +324,34 @@ public:
     void OnContextInitialized() override {
         g_fbro_ready = true;
         LogLine(L"FBro context initialized.");
-        CreateEmbeddedBaiduBrowser();
+        CreateEmbeddedBrowser();
     }
 
 private:
     IMPLEMENT_REFCOUNTING(InitEvent);
 };
 
-HWND CreateButton(HWND parent, const wchar_t* text, int id) {
-    HWND button = CreateWindowExW(0, L"BUTTON", text,
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        0, 0, 1, 1, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
-        GetModuleHandleW(nullptr), nullptr);
-    g_buttons.push_back(button);
-    return button;
-}
-
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
     case WM_CREATE:
-        CreateButton(hwnd, L"\u53d6Cookie_url", kButtonCookieUrl);
-        CreateButton(hwnd, L"\u53d6Cookie_\u5168\u5c40", kButtonCookieGlobalGet);
-        CreateButton(hwnd, L"\u7f6eCookie_\u5168\u5c40", kButtonCookieGlobalSet);
-        CreateButton(hwnd, L"\u53d6Cookie", kButtonCookieBrowserGet);
-        CreateButton(hwnd, L"\u7f6eCookie", kButtonCookieBrowserSet);
-        CreateButton(hwnd, L"\u5220\u9664Cookie", kButtonCookieDelete);
+        g_create_server_button = CreateWindowExW(0, L"BUTTON",
+            L"\u521b\u5efa\u670d\u52a1\u5668",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            16, 12, 140, 32, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCreateServer)),
+            GetModuleHandleW(nullptr), nullptr);
         g_browser_host = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-            0, 0, 1, 1, hwnd, nullptr,
+            0, kToolbarHeight, 1, 1, hwnd, nullptr,
             GetModuleHandleW(nullptr), nullptr);
         LayoutChildren();
         return 0;
     case WM_COMMAND:
-        HandleAction(LOWORD(wparam));
-        return 0;
+        if (LOWORD(wparam) == kButtonCreateServer) {
+            CreateServer();
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
     case WM_SIZE:
         LayoutChildren();
         return 0;
@@ -442,6 +359,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         if (wparam == kCloseFallbackTimer && g_close_requested) {
             LogLine(L"Close fallback timer fired.");
             g_browser = nullptr;
+            g_server = nullptr;
+            g_server_create_requested = false;
             MaybeDestroyAfterClose();
             return 0;
         }
@@ -472,7 +391,7 @@ bool CreateMainWindow(HINSTANCE instance, int show_cmd) {
     if (!RegisterClassExW(&wc)) return false;
 
     g_main_window = CreateWindowExW(WS_EX_APPWINDOW, kMainWindowClass,
-        L"Cookie\u8bbe\u7f6e\u53d6\u51fa",
+        L"\u670d\u52a1\u5668",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800,
         nullptr, nullptr, instance, nullptr);
@@ -530,20 +449,20 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd) {
 
     WSADATA wsa_data{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        MessageBoxW(nullptr, L"WSAStartup failed.", L"CookieSettingsDemo", MB_ICONERROR);
+        MessageBoxW(nullptr, L"WSAStartup failed.", L"ServerDemo", MB_ICONERROR);
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;
     }
 
     if (!CreateMainWindow(instance, show_cmd)) {
-        MessageBoxW(nullptr, L"Create main window failed.", L"CookieSettingsDemo", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Create main window failed.", L"ServerDemo", MB_ICONERROR);
         WSACleanup();
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;
     }
 
     if (!InitFbro()) {
-        MessageBoxW(nullptr, L"FBro initialization failed.", L"CookieSettingsDemo", MB_ICONERROR);
+        MessageBoxW(nullptr, L"FBro initialization failed.", L"ServerDemo", MB_ICONERROR);
         WSACleanup();
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;

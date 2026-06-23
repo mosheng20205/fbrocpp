@@ -30,6 +30,9 @@ constexpr wchar_t kMainWindowClass[] = L"NativeFBroDemo.MainWindow";
 constexpr int kButtonCreateEmbedded = 1001;
 constexpr int kButtonCreateNative = 1002;
 constexpr int kToolbarHeight = 64;
+constexpr UINT kMsgMaybeDestroy = WM_APP + 301;
+constexpr UINT_PTR kCloseFallbackTimer = 401;
+constexpr UINT kCloseFallbackMs = 5000;
 HWND g_main_window = nullptr;
 HWND g_embed_button = nullptr;
 HWND g_native_button = nullptr;
@@ -38,6 +41,9 @@ CefRefPtr<CefBrowser> g_browser;
 CefRefPtr<CefBrowser> g_native_browser;
 std::vector<CefRefPtr<CefClient>> g_native_clients;
 bool g_fbro_context_ready = false;
+bool g_close_requested = false;
+bool g_destroying_window = false;
+bool g_fbro_shutdown_started = false;
 
 std::string ToSystemAnsi(const std::wstring& value) {
     if (value.empty()) {
@@ -212,6 +218,45 @@ void LogLine(const std::wstring& message) {
     out << ToUtf8(line);
 }
 
+bool HasLiveResources() {
+    return g_browser != nullptr || g_native_browser != nullptr;
+}
+
+void MaybeDestroyAfterClose() {
+    if (!g_close_requested || g_destroying_window || HasLiveResources()) {
+        return;
+    }
+
+    g_destroying_window = true;
+    if (g_main_window) {
+        KillTimer(g_main_window, kCloseFallbackTimer);
+        DestroyWindow(g_main_window);
+    }
+    FBroQuitMessageLoop();
+    PostQuitMessage(0);
+}
+
+void RequestAppClose(HWND hwnd) {
+    if (g_destroying_window) {
+        return;
+    }
+
+    g_close_requested = true;
+    ShowWindow(hwnd, SW_HIDE);
+    SetTimer(hwnd, kCloseFallbackTimer, kCloseFallbackMs, nullptr);
+    if (g_browser) {
+        FBroHsBrowserHost_CloseBrowser(g_browser, true);
+    }
+    if (g_native_browser) {
+        g_native_browser->GetHost()->CloseBrowser(true);
+    }
+    if (!g_fbro_shutdown_started) {
+        g_fbro_shutdown_started = true;
+        FBroShutdown(FALSE);
+    }
+    MaybeDestroyAfterClose();
+}
+
 class VipRuntimeResultCallback final : public FBroHsGeneralResultCallback {
 public:
     void Callback_Data(CefRefPtr<CefBrowser>,
@@ -351,6 +396,9 @@ public:
         if (browser == g_browser) {
             g_browser = nullptr;
         }
+        if (g_main_window) {
+            PostMessageW(g_main_window, kMsgMaybeDestroy, 0, 0);
+        }
     }
 
     void OnLoadEnd(CefRefPtr<CefBrowser>,
@@ -451,6 +499,9 @@ public:
         if (browser == g_native_browser) {
             g_native_browser = nullptr;
         }
+        if (g_main_window) {
+            PostMessageW(g_main_window, kMsgMaybeDestroy, 0, 0);
+        }
     }
 
     void OnLoadEnd(CefRefPtr<CefBrowser>,
@@ -531,17 +582,24 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
     case WM_SIZE:
         LayoutBrowser();
         return 0;
+    case WM_TIMER:
+        if (wparam == kCloseFallbackTimer && g_close_requested) {
+            LogLine(L"Close fallback timer fired.");
+            g_browser = nullptr;
+            g_native_browser = nullptr;
+            MaybeDestroyAfterClose();
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    case kMsgMaybeDestroy:
+        MaybeDestroyAfterClose();
+        return 0;
     case WM_CLOSE:
-        if (g_browser) {
-            FBroHsBrowserHost_CloseBrowser(g_browser, true);
-        }
-        if (g_native_browser) {
-            g_native_browser->GetHost()->CloseBrowser(true);
-        }
-        DestroyWindow(hwnd);
+        RequestAppClose(hwnd);
         return 0;
     case WM_DESTROY:
         FBroQuitMessageLoop();
+        PostQuitMessage(0);
         return 0;
     default:
         return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -656,7 +714,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd) {
     }
 
     FBroRunMessageLoop();
-    FBroShutdown(TRUE);
+    if (!g_fbro_shutdown_started) {
+        FBroShutdown(FALSE);
+    }
     WSACleanup();
     if (SUCCEEDED(co_result)) {
         CoUninitialize();

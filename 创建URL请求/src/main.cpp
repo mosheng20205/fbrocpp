@@ -5,29 +5,39 @@
 #include "FBroBrowserHost.h"
 #include "FBroControl.h"
 #include "FBroFrame.h"
+#include "FBroHsBaseEvent.h"
 #include "FBroHsEvent.h"
 #include "FBroInit.h"
+#include "FBroRequest.h"
+#include "FBroRequestContext.h"
 
+#include <algorithm>
 #include <array>
 #include <clocale>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
-constexpr wchar_t kMainWindowClass[] = L"BaiduFormFill.MainWindow";
-constexpr int kButtonFill = 1001;
-constexpr int kToolbarHeight = 56;
+constexpr wchar_t kMainWindowClass[] = L"URLRequestDemo.MainWindow";
+constexpr int kButtonGlobalRequest = 1001;
+constexpr int kButtonFrameRequest = 1002;
+constexpr int kToolbarHeight = 64;
 constexpr UINT kMsgMaybeDestroy = WM_APP + 301;
+constexpr UINT kMsgAppendLog = WM_APP + 302;
 constexpr UINT_PTR kCloseFallbackTimer = 401;
 constexpr UINT kCloseFallbackMs = 5000;
 
 HWND g_main_window = nullptr;
-HWND g_fill_button = nullptr;
+HWND g_global_button = nullptr;
+HWND g_frame_button = nullptr;
+HWND g_status_box = nullptr;
 HWND g_browser_host = nullptr;
 CefRefPtr<CefBrowser> g_browser;
+std::vector<CefRefPtr<CefURLRequestClient>> g_pending_requests;
 bool g_fbro_ready = false;
 bool g_close_requested = false;
 bool g_destroying_window = false;
@@ -41,10 +51,7 @@ std::filesystem::path ExeDir() {
 }
 
 std::string ToSystemAnsi(const std::wstring& value) {
-    if (value.empty()) {
-        return {};
-    }
-
+    if (value.empty()) return {};
     const int size = WideCharToMultiByte(CP_ACP, 0, value.data(),
         static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     std::string result(size, '\0');
@@ -54,10 +61,7 @@ std::string ToSystemAnsi(const std::wstring& value) {
 }
 
 std::string ToUtf8(const std::wstring& value) {
-    if (value.empty()) {
-        return {};
-    }
-
+    if (value.empty()) return {};
     const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(),
         static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     std::string result(size, '\0');
@@ -66,12 +70,47 @@ std::string ToUtf8(const std::wstring& value) {
     return result;
 }
 
+std::wstring FromCefString(const CefString& value) {
+    return value.ToWString();
+}
+
 void LogLine(const std::wstring& message) {
     OutputDebugStringW((message + L"\n").c_str());
-
-    std::ofstream out(ExeDir() / L"baidu-form-fill.log",
+    std::ofstream out(ExeDir() / L"url-request-demo.log",
         std::ios::app | std::ios::binary);
     out << ToUtf8(message) << "\n";
+}
+
+int MaxInt(int a, int b) {
+    return a > b ? a : b;
+}
+
+int MinInt(int a, int b) {
+    return a < b ? a : b;
+}
+
+struct LogMessage {
+    std::wstring text;
+};
+
+void AppendStatusDirect(const std::wstring& text) {
+    LogLine(text);
+    if (!g_status_box) return;
+
+    const int len = GetWindowTextLengthW(g_status_box);
+    SendMessageW(g_status_box, EM_SETSEL, len, len);
+    SendMessageW(g_status_box, EM_REPLACESEL, FALSE,
+        reinterpret_cast<LPARAM>((text + L"\r\n").c_str()));
+}
+
+void PostStatus(std::wstring text) {
+    auto* message = new LogMessage{std::move(text)};
+    if (g_main_window) {
+        PostMessageW(g_main_window, kMsgAppendLog, 0,
+            reinterpret_cast<LPARAM>(message));
+    } else {
+        delete message;
+    }
 }
 
 bool HasLiveResources() {
@@ -111,21 +150,26 @@ void RequestAppClose(HWND hwnd) {
 }
 
 void LayoutChildren() {
-    if (!g_main_window) {
-        return;
-    }
+    if (!g_main_window) return;
 
     RECT rc{};
     GetClientRect(g_main_window, &rc);
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
 
-    if (g_fill_button) {
-        MoveWindow(g_fill_button, 16, 12, 140, 32, TRUE);
+    if (g_global_button) {
+        MoveWindow(g_global_button, 16, 16, 180, 32, TRUE);
+    }
+    if (g_frame_button) {
+        MoveWindow(g_frame_button, 208, 16, 180, 32, TRUE);
+    }
+    if (g_status_box) {
+        MoveWindow(g_status_box, MaxInt(400, width - 500), 8,
+            MinInt(480, MaxInt(1, width - 420)), 48, TRUE);
     }
     if (g_browser_host) {
         MoveWindow(g_browser_host, 0, kToolbarHeight, width,
-            max(1, height - kToolbarHeight), TRUE);
+            MaxInt(1, height - kToolbarHeight), TRUE);
     }
     if (g_browser) {
         HWND browser_hwnd = FBroHsBrowserHost_GetWindowHandle(g_browser);
@@ -133,70 +177,181 @@ void LayoutChildren() {
             RECT host_rc{};
             GetClientRect(g_browser_host, &host_rc);
             MoveWindow(browser_hwnd, 0, 0,
-                host_rc.right - host_rc.left,
-                host_rc.bottom - host_rc.top,
+                MaxInt(1, host_rc.right - host_rc.left),
+                MaxInt(1, host_rc.bottom - host_rc.top),
                 TRUE);
         }
     }
 }
 
-void ExecuteBaiduFill() {
+std::wstring RequestStatusName(int status) {
+    switch (status) {
+    case 0: return L"UNKNOWN";
+    case 1: return L"SUCCESS";
+    case 2: return L"IO_PENDING";
+    case 3: return L"CANCELED";
+    case 4: return L"FAILED";
+    default: return L"STATUS_" + std::to_wstring(status);
+    }
+}
+
+std::wstring DescribeRequest(CefRefPtr<CefURLRequest> request) {
+    if (!request) return L"request=null";
+
+    std::wostringstream out;
+    const int status = request->GetRequestStatus();
+    out << L"status=" << RequestStatusName(status);
+
+    CefRefPtr<CefRequest> inner = request->GetRequest();
+    if (inner) {
+        out << L", url=" << FromCefString(inner->GetURL());
+    }
+
+    CefRefPtr<CefResponse> response = request->GetResponse();
+    if (response) {
+        out << L", http=" << response->GetStatus()
+            << L", mime=" << FromCefString(response->GetMimeType());
+    }
+
+    const int error = request->GetRequestError();
+    if (error != 0) {
+        out << L", error=" << error;
+    }
+    return out.str();
+}
+
+std::wstring DecodeResponseText(const std::string& data) {
+    if (data.empty()) return {};
+
+    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+        data.data(), static_cast<int>(data.size()), nullptr, 0);
+    UINT code_page = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
+    if (size <= 0) {
+        code_page = CP_ACP;
+        flags = 0;
+        size = MultiByteToWideChar(code_page, flags,
+            data.data(), static_cast<int>(data.size()), nullptr, 0);
+    }
+    if (size <= 0) {
+        return L"<binary or undecodable response body>";
+    }
+
+    std::wstring text(static_cast<size_t>(size), L'\0');
+    MultiByteToWideChar(code_page, flags,
+        data.data(), static_cast<int>(data.size()), text.data(), size);
+    return text;
+}
+
+class URLRequestClient final : public CefURLRequestClient {
+public:
+    explicit URLRequestClient(std::wstring label)
+        : label_(std::move(label)) {}
+
+    void OnRequestComplete(CefRefPtr<CefURLRequest> request) override {
+        PostStatus(label_ + L" complete, " +
+            L", " + DescribeRequest(request));
+        PostStatus(label_ + L" response body:\r\n" +
+            DecodeResponseText(response_body_));
+        ReleaseSelf();
+    }
+
+    void OnUploadProgress(CefRefPtr<CefURLRequest>,
+                          int64_t current,
+                          int64_t total) override {
+        PostStatus(label_ + L" upload " + std::to_wstring(current) +
+            L"/" + std::to_wstring(total));
+    }
+
+    void OnDownloadProgress(CefRefPtr<CefURLRequest>,
+                            int64_t current,
+                            int64_t total) override {
+        PostStatus(label_ + L" progress " + std::to_wstring(current) +
+            L"/" + std::to_wstring(total));
+    }
+
+    void OnDownloadData(CefRefPtr<CefURLRequest> request,
+                        const void* data,
+                        size_t data_length) override {
+        if (data && data_length > 0) {
+            const auto* bytes = static_cast<const char*>(data);
+            response_body_.append(bytes, bytes + data_length);
+        }
+
+        PostStatus(label_ + L" data bytes=" + std::to_wstring(data_length) +
+            L", total=" + std::to_wstring(response_body_.size()) +
+            L", " + DescribeRequest(request));
+    }
+
+    bool GetAuthCredentials(bool,
+                            const CefString&,
+                            int,
+                            const CefString&,
+                            const CefString&,
+                            CefRefPtr<CefAuthCallback>) override {
+        return false;
+    }
+
+private:
+    void ReleaseSelf() {
+        if (!g_main_window) return;
+        PostMessageW(g_main_window, kMsgAppendLog, 1, reinterpret_cast<LPARAM>(this));
+    }
+
+    std::wstring label_;
+    std::string response_body_;
+    IMPLEMENT_REFCOUNTING(URLRequestClient);
+};
+
+CefRefPtr<CefRequest> CreateGetRequest() {
+    CefRefPtr<CefRequest> request = CefRequest::Create();
+    FBroHsRequest_SetURL(request, CefString(L"https://api.fbrowser.site:8443/"));
+    FBroHsRequest_SetMethod(request, CefString(L"GET"));
+    return request;
+}
+
+void TrackRequestClient(CefRefPtr<CefURLRequestClient> client) {
+    g_pending_requests.push_back(client);
+}
+
+void RemoveRequestClient(CefURLRequestClient* client) {
+    g_pending_requests.erase(std::remove_if(g_pending_requests.begin(),
+        g_pending_requests.end(),
+        [client](const CefRefPtr<CefURLRequestClient>& item) {
+            return item.get() == client;
+        }), g_pending_requests.end());
+}
+
+void CreateGlobalURLRequest() {
+    CefRefPtr<CefRequest> request = CreateGetRequest();
+    CefRefPtr<URLRequestClient> client =
+        new URLRequestClient(L"\u5168\u5c40URL\u8bf7\u6c42");
+    TrackRequestClient(client);
+    AppendStatusDirect(L"\u521b\u5efa\u5168\u5c40URL\u8bf7\u6c42");
+    CefURLRequest::Create(request, client, nullptr);
+}
+
+void CreateFrameURLRequest() {
     if (!g_browser) {
-        MessageBoxW(g_main_window, L"Browser is not ready.", L"BaiduFormFill", MB_ICONINFORMATION);
+        MessageBoxW(g_main_window, L"Browser is not ready.", L"URLRequestDemo",
+            MB_ICONINFORMATION);
         return;
     }
 
-    const int browser_id = FBroHsBrowser_GetIdentifier(g_browser);
-    const BOOL has_document = FBroHsBrowser_HasDocument(g_browser);
-    LogLine(L"Baidu fill clicked. browser_id=" + std::to_wstring(browser_id) +
-        L", has_document=" + std::to_wstring(has_document));
-
-    CefRefPtr<CefFrame> frame = FBroHsBrowser_GetMainFrame(g_browser);
-    if (!frame) {
-        LogLine(L"Baidu fill failed: FBro main frame is null.");
-        MessageBoxW(g_main_window, L"Main frame is not ready.", L"BaiduFormFill", MB_ICONINFORMATION);
+    CefRefPtr<CefRequestContext> context =
+        FBroHsBrowserHost_GetRequestContext(g_browser);
+    if (!context) {
+        MessageBoxW(g_main_window, L"Browser request context is not ready.", L"URLRequestDemo",
+            MB_ICONINFORMATION);
         return;
     }
 
-    static const wchar_t script[] = LR"JS(
-(function () {
-  var input = document.querySelector("#kw") ||
-              document.querySelector("input[id*='kw']") ||
-              document.querySelector("input[name='wd']") ||
-              document.querySelector("textarea[name='wd']");
-  if (!input) {
-    console.warn("[BaiduFormFill] input not found");
-    return;
-  }
-
-  var value = "FBrowserCEF3lib\u6846\u67b6";
-  input.focus();
-  input.click();
-
-  var proto = Object.getPrototypeOf(input);
-  var descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-  if (descriptor && descriptor.set) {
-    descriptor.set.call(input, value);
-  } else {
-    input.value = value;
-  }
-
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }));
-
-  var button = document.querySelector("#su") ||
-               document.querySelector("input[type='submit']") ||
-               document.querySelector("button[type='submit']");
-  if (button) {
-    setTimeout(function () { button.click(); }, 100);
-  }
-})();
-)JS";
-
-    FBroHsBrowserFrame_ExecuteJavaScript(frame, CefString(script),
-        CefString(L"baidu-form-fill"), 1);
-    LogLine(L"Baidu fill JavaScript executed.");
+    CefRefPtr<CefRequest> request = CreateGetRequest();
+    CefRefPtr<URLRequestClient> client =
+        new URLRequestClient(L"\u6846\u67b6URL\u8bf7\u6c42");
+    TrackRequestClient(client);
+    AppendStatusDirect(L"\u521b\u5efa\u6846\u67b6URL\u8bf7\u6c42");
+    CefURLRequest::Create(request, client, context);
 }
 
 class BrowserEvent final : public FBroHsBroEvent {
@@ -243,8 +398,8 @@ void CreateEmbeddedBaiduBrowser() {
     window_info.parent_window = g_browser_host;
     window_info.x = 0;
     window_info.y = 0;
-    window_info.width = max(1, rc.right - rc.left);
-    window_info.height = max(1, rc.bottom - rc.top);
+    window_info.width = MaxInt(1, rc.right - rc.left);
+    window_info.height = MaxInt(1, rc.bottom - rc.top);
     window_info.style = WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     window_info.ex_style = 0;
     window_info.windowless_rendering_enabled = FALSE;
@@ -257,11 +412,11 @@ void CreateEmbeddedBaiduBrowser() {
 
     CefRefPtr<BrowserEvent> event = new BrowserEvent();
     CefRefPtr<CefDictionaryValue> extra = CefDictionaryValue::Create();
-    extra->SetString("flag", "BaiduFormFill");
+    extra->SetString("flag", "URLRequestDemo");
 
     const BOOL ok = FBroHsCreate(CefString("https://www.baidu.com"),
         &window_info, &browser_setting, nullptr, extra, event, nullptr,
-        CefString("BaiduFormFill"));
+        CefString("URLRequestDemo"));
     if (!ok) {
         LogLine(L"FBroHsCreate failed.");
     }
@@ -282,11 +437,21 @@ private:
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
     case WM_CREATE:
-        g_fill_button = CreateWindowExW(0, L"BUTTON",
-            L"\u767e\u5ea6\u586b\u8868",
+        g_global_button = CreateWindowExW(0, L"BUTTON",
+            L"\u521b\u5efa\u5168\u5c40URL\u8bf7\u6c42",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            16, 12, 140, 32, hwnd,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonFill)),
+            16, 16, 180, 32, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonGlobalRequest)),
+            GetModuleHandleW(nullptr), nullptr);
+        g_frame_button = CreateWindowExW(0, L"BUTTON",
+            L"\u521b\u5efa\u6846\u67b6URL\u8bf7\u6c42",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            208, 16, 180, 32, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonFrameRequest)),
+            GetModuleHandleW(nullptr), nullptr);
+        g_status_box = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL,
+            0, 0, 1, 1, hwnd, nullptr,
             GetModuleHandleW(nullptr), nullptr);
         g_browser_host = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
@@ -295,13 +460,28 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         LayoutChildren();
         return 0;
     case WM_COMMAND:
-        if (LOWORD(wparam) == kButtonFill) {
-            ExecuteBaiduFill();
+        switch (LOWORD(wparam)) {
+        case kButtonGlobalRequest:
+            CreateGlobalURLRequest();
             return 0;
+        case kButtonFrameRequest:
+            CreateFrameURLRequest();
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
     case WM_SIZE:
         LayoutChildren();
+        return 0;
+    case kMsgAppendLog:
+        if (wparam == 1) {
+            RemoveRequestClient(reinterpret_cast<CefURLRequestClient*>(lparam));
+            return 0;
+        }
+        if (auto* log = reinterpret_cast<LogMessage*>(lparam)) {
+            AppendStatusDirect(log->text);
+            delete log;
+        }
         return 0;
     case WM_TIMER:
         if (wparam == kCloseFallbackTimer && g_close_requested) {
@@ -339,9 +519,9 @@ bool CreateMainWindow(HINSTANCE instance, int show_cmd) {
     }
 
     g_main_window = CreateWindowExW(WS_EX_APPWINDOW, kMainWindowClass,
-        L"\u767e\u5ea6\u586b\u8868",
+        L"\u521b\u5efaURL\u8bf7\u6c42",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1240, 820,
         nullptr, nullptr, instance, nullptr);
     if (!g_main_window) {
         return false;
@@ -399,20 +579,20 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd) {
 
     WSADATA wsa_data{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        MessageBoxW(nullptr, L"WSAStartup failed.", L"BaiduFormFill", MB_ICONERROR);
+        MessageBoxW(nullptr, L"WSAStartup failed.", L"URLRequestDemo", MB_ICONERROR);
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;
     }
 
     if (!CreateMainWindow(instance, show_cmd)) {
-        MessageBoxW(nullptr, L"Create main window failed.", L"BaiduFormFill", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Create main window failed.", L"URLRequestDemo", MB_ICONERROR);
         WSACleanup();
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;
     }
 
     if (!InitFbro()) {
-        MessageBoxW(nullptr, L"FBro initialization failed.", L"BaiduFormFill", MB_ICONERROR);
+        MessageBoxW(nullptr, L"FBro initialization failed.", L"URLRequestDemo", MB_ICONERROR);
         WSACleanup();
         if (SUCCEEDED(co_result)) CoUninitialize();
         return 1;

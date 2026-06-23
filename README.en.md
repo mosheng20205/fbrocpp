@@ -40,6 +40,46 @@ This repository contains C++ examples for using the FBro / FBrowser CEF module w
     - `置Cookie`
     - `删除Cookie`
 
+- `同步辅助类`
+  - Opens Baidu in an embedded browser.
+  - Provides four sync helper buttons:
+    - `同步执行JS`
+    - `同步取源码`
+    - `同步取文本`
+    - `同步创建浏览器`
+  - Note: directly reproducing Volcano's `FBroHsBrowserFrame_ExecuteJavaScriptToHasReturn + FBroHsJsCallback` pattern in pure C++ triggers a Debug CRT heap assertion. This sample uses native CEF JavaScript execution plus a DOM marker readback as the stable alternative.
+
+- `服务器`
+  - Opens `http://coolaf.com/tool/chattest` in an embedded browser.
+  - Clicking `创建服务器` calls `FBroHsServer_CreateServer("127.0.0.1", 8888, 100, ...)`.
+  - Demonstrates HTTP response handling, WebSocket accept, and WebSocket message echo.
+
+- `服务器Web`
+  - Loads a local desktop web page inside the embedded browser.
+  - Includes built-in `Connect` and `Send Test Message` buttons for direct WebSocket echo testing.
+  - The verified stable pattern is:
+    - cache inbound WebSocket messages inside `OnWebSocketMessage`
+    - send the echo later from the main thread via a posted window message
+  - This avoids heap corruption caused by synchronously calling `FBroHsServer_SendWebSocketMessage` inside the WebSocket message callback context.
+
+- `创建URL请求`
+  - Opens Baidu in an embedded browser.
+  - Provides two URL request buttons:
+    - `创建全局URL请求`
+    - `创建框架URL请求`
+  - The request URL follows the Volcano sample: `https://api.fbrowser.site:8443/`.
+  - The stable implementation uses native CEF `CefURLRequest::Create`:
+    - global request: no explicit `RequestContext`
+    - frame/browser request: uses the current browser `RequestContext`
+  - Note: directly using `FBroHsURLRequest_Create + a hand-written FBroHsURLRequestClient`, or `frame->CreateURLRequest`, triggers a Debug CRT heap assertion in pure C++.
+  - The sample accumulates `OnDownloadData` chunks and prints the full response body on completion.
+
+- `JS交互`
+  - Creates an embedded HTML page with `FBroHsGetDataURI("text/html", html)`.
+  - Simulates the Volcano sample's `cefQuery` and `cefQuerytest` JavaScript interaction entry points.
+  - The stable implementation uses `OnConsoleMessage + ExecuteJavaScript` for JS/C++ two-way communication.
+  - It intentionally avoids direct `FBroHsQueryFunctions + hand-written FBroHsQueryHandler` usage to prevent callback lifetime/allocation issues outside the Volcano runtime.
+
 ## Important: deps.zip Is Not Included
 
 This repository does not include `deps.zip` or the `third_party/fbro` dependency directory.
@@ -100,6 +140,11 @@ Example outputs:
 build/NativeFBroDemo/Debug/NativeFBroDemo.exe
 build/BaiduFormFill/Debug/BaiduFormFill.exe
 build/Cookie设置取出/Debug/CookieSettingsDemo.exe
+build/同步辅助类/Debug/SyncHelperDemo.exe
+build/服务器/Debug/ServerDemo.exe
+build/服务器Web/Debug/ServerWebDemo.exe
+build/创建URL请求/Debug/URLRequestDemo.exe
+build/JS交互/Debug/JSInteractionDemo.exe
 ```
 
 ## Encoding Rule
@@ -108,6 +153,12 @@ To avoid Chinese text corruption under the current MSVC code page, prefer Unicod
 
 ```cpp
 L"\u767e\u5ea6\u586b\u8868"
+```
+
+For embedded HTML pages, HTML entities are also recommended:
+
+```html
+JS&#20132;&#20114;&#27979;&#35797;
 ```
 
 ## License

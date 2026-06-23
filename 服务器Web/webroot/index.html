@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ServerWebDemo</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">FBro Native C++</p>
+        <h1>Server Web Demo</h1>
+        <p class="summary">Local HTTP routes, static assets, and a WebSocket echo channel inside one native desktop sample.</p>
+      </div>
+      <div class="badge-group">
+        <span class="badge">HTTP</span>
+        <span class="badge">API</span>
+        <span class="badge">WebSocket</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>API Requests</h2>
+          <span id="hint">Ready</span>
+        </div>
+        <div class="row">
+          <button data-api="/api/status">GET /api/status</button>
+          <button data-api="/api/time">GET /api/time</button>
+          <button data-api="/api/echo">GET /api/echo</button>
+        </div>
+        <pre id="api-result">Waiting for request...</pre>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>WebSocket</h2>
+          <span id="ws-state">Disconnected</span>
+        </div>
+        <div class="row">
+          <button id="ws-connect">Connect</button>
+          <button id="ws-send">Send Ping</button>
+        </div>
+        <pre id="ws-log">No websocket activity yet.</pre>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

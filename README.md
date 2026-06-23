@@ -41,6 +41,46 @@
     - `置Cookie`
     - `删除Cookie`
 
+- `同步辅助类`
+  - 内嵌浏览器打开百度。
+  - 提供四个同步辅助按钮：
+    - `同步执行JS`
+    - `同步取源码`
+    - `同步取文本`
+    - `同步创建浏览器`
+  - 注意：纯 C++ 中直接复刻火山 `FBroHsBrowserFrame_ExecuteJavaScriptToHasReturn + FBroHsJsCallback` 会触发 Debug CRT 堆断言。当前示例使用原生 CEF 执行 JS，再读取页面标记作为稳定替代方案。
+
+- `服务器`
+  - 内嵌浏览器打开 `http://coolaf.com/tool/chattest`。
+  - 点击 `创建服务器` 后调用 `FBroHsServer_CreateServer("127.0.0.1", 8888, 100, ...)`。
+  - 示例实现了 HTTP 请求响应、WebSocket 连接接受和消息回显。
+
+- `服务器Web`
+  - 内嵌浏览器加载本地桌面 Web 页面。
+  - 当前页面内置 `Connect` / `Send Test Message` 按钮，可直接测试 WebSocket 回显。
+  - 已验证稳定的实现方式是：
+    - `OnWebSocketMessage` 回调中只缓存消息
+    - 通过主线程消息异步调用 `FBroHsServer_SendWebSocketMessage`
+  - 这可以避免在 WebSocket 消息回调上下文中同步回发导致的堆损坏问题。
+
+- `创建URL请求`
+  - 内嵌浏览器打开百度。
+  - 提供两个 URL 请求按钮：
+    - `创建全局URL请求`
+    - `创建框架URL请求`
+  - 请求地址参考火山示例：`https://api.fbrowser.site:8443/`。
+  - 当前稳定实现使用原生 CEF `CefURLRequest::Create`：
+    - 全局请求使用空 `RequestContext`
+    - 框架请求使用当前浏览器的 `RequestContext`
+  - 注意：纯 C++ 直接使用 `FBroHsURLRequest_Create + 手写 FBroHsURLRequestClient` 或 `frame->CreateURLRequest` 会触发 Debug CRT 堆断言。
+  - 示例会累加 `OnDownloadData` 数据，并在请求完成后输出完整响应体。
+
+- `JS交互`
+  - 使用 `FBroHsGetDataURI("text/html", html)` 创建内嵌 HTML 页面。
+  - 页面模拟火山示例中的 `cefQuery` / `cefQuerytest` 两个 JS 交互入口。
+  - 当前稳定实现使用 `OnConsoleMessage + ExecuteJavaScript` 完成 JS 与 C++ 双向通信。
+  - 注意：没有直接使用 `FBroHsQueryFunctions + 手写 FBroHsQueryHandler`，避免纯 C++ callback 生命周期和火山运行时不一致导致的堆断言风险。
+
 ## 重要说明：不提供 deps.zip
 
 本仓库不提供 `deps.zip`，也不提交 `third_party/fbro` 依赖目录。
@@ -101,6 +141,11 @@ build/FBroCppSuite.sln
 build/NativeFBroDemo/Debug/NativeFBroDemo.exe
 build/BaiduFormFill/Debug/BaiduFormFill.exe
 build/Cookie设置取出/Debug/CookieSettingsDemo.exe
+build/同步辅助类/Debug/SyncHelperDemo.exe
+build/服务器/Debug/ServerDemo.exe
+build/服务器Web/Debug/ServerWebDemo.exe
+build/创建URL请求/Debug/URLRequestDemo.exe
+build/JS交互/Debug/JSInteractionDemo.exe
 ```
 
 ## 编码约定
@@ -109,6 +154,12 @@ build/Cookie设置取出/Debug/CookieSettingsDemo.exe
 
 ```cpp
 L"\u767e\u5ea6\u586b\u8868"
+```
+
+嵌入 HTML 页面时，中文内容也可以使用 HTML 实体，例如：
+
+```html
+JS&#20132;&#20114;&#27979;&#35797;
 ```
 
 ## 许可证

@@ -1,8 +1,22 @@
-# FBroC++ 示例工程
+﻿# FBroC++ 示例工程
 
 中文 | [English](README.en.md)
 
 这是一个使用 C++ 调用 FBro / FBrowser CEF 模块的 Visual Studio / CMake 示例集合。项目来自火山 FBrowser 示例的 C++ 化整理，目标是把常用功能拆成独立、可运行、可学习的小项目。
+
+## 项目截图
+
+### 创建浏览器
+
+![创建浏览器](image/CreateBrowser.png)
+
+### 百度填表
+
+![百度填表](image/FromFill.png)
+
+### Cookie 设置取出
+
+![Cookie 设置取出](image/Cookie.png)
 
 ## 当前项目
 

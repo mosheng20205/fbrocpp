@@ -1,8 +1,22 @@
-# FBroC++ Samples
+﻿# FBroC++ Samples
 
 [中文](README.md) | English
 
 This repository contains C++ examples for using the FBro / FBrowser CEF module with Visual Studio and CMake. The samples are organized from Volcano FBrowser demos into small native C++ projects.
+
+## Screenshots
+
+### Browser Creation
+
+![Browser Creation](image/CreateBrowser.png)
+
+### Baidu Form Fill
+
+![Baidu Form Fill](image/FromFill.png)
+
+### Cookie Settings Demo
+
+![Cookie Settings Demo](image/Cookie.png)
 
 ## Projects
 

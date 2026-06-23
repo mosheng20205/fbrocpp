@@ -81,6 +81,19 @@
   - 当前稳定实现使用 `OnConsoleMessage + ExecuteJavaScript` 完成 JS 与 C++ 双向通信。
   - 注意：没有直接使用 `FBroHsQueryFunctions + 手写 FBroHsQueryHandler`，避免纯 C++ callback 生命周期和火山运行时不一致导致的堆断言风险。
 
+- `拦截获取简单示例`
+  - 内嵌浏览器打开百度。
+  - 自动监听页面加载过程中的所有资源响应，并把响应体保存到 exe 旁边的 `CapturedResources` 目录。
+  - 文件后缀会根据 DevTools 返回的 `mimeType` 和 URL 后缀自动匹配，例如 `.js`、`.png`、`.css`、`.woff2`、`.svg`、`.json`。
+  - 当前稳定实现使用 DevTools Protocol 的 `Network.responseReceived` / `Network.loadingFinished` / `Network.getResponseBody`。
+  - 注意：纯 C++ 直接返回 `CefResponseFilter` 或复刻火山 `FBroHsResponseFilter` 会触发 Debug CRT 堆断言，因此本项目不走 FBro ResponseFilter 回调链。
+
+- `篡改资源实例`
+  - 内嵌浏览器打开百度。
+  - 自动拦截 `https://www.baidu.com/` 首页请求，并把百度首页替换为本地自定义 HTML。
+  - 当前稳定实现使用 DevTools Protocol 的 `Fetch.enable` / `Fetch.requestPaused` / `Fetch.fulfillRequest`。
+  - 这对应火山“资源篡改实例”中通过 `GetResourceHandler` 返回自定义 HTML 的效果，但避免纯 C++ 手写 FBro ResourceHandler 回调导致的堆分配风险。
+
 ## 重要说明：不提供 deps.zip
 
 本仓库不提供 `deps.zip`，也不提交 `third_party/fbro` 依赖目录。
@@ -146,6 +159,8 @@ build/服务器/Debug/ServerDemo.exe
 build/服务器Web/Debug/ServerWebDemo.exe
 build/创建URL请求/Debug/URLRequestDemo.exe
 build/JS交互/Debug/JSInteractionDemo.exe
+build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
+build/篡改资源实例/Debug/ResourceTamperDemo.exe
 ```
 
 ## 编码约定

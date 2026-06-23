@@ -80,6 +80,19 @@ This repository contains C++ examples for using the FBro / FBrowser CEF module w
   - The stable implementation uses `OnConsoleMessage + ExecuteJavaScript` for JS/C++ two-way communication.
   - It intentionally avoids direct `FBroHsQueryFunctions + hand-written FBroHsQueryHandler` usage to prevent callback lifetime/allocation issues outside the Volcano runtime.
 
+- `拦截获取简单示例`
+  - Opens Baidu in an embedded browser.
+  - Automatically listens for page resource responses and saves response bodies beside the executable under `CapturedResources`.
+  - File extensions are matched from DevTools `mimeType` and URL suffixes, such as `.js`, `.png`, `.css`, `.woff2`, `.svg`, and `.json`.
+  - The stable implementation uses DevTools Protocol `Network.responseReceived`, `Network.loadingFinished`, and `Network.getResponseBody`.
+  - Note: directly returning `CefResponseFilter`, or reproducing Volcano's `FBroHsResponseFilter` callback in pure C++, triggers a Debug CRT heap assertion. This sample avoids the FBro ResponseFilter callback chain.
+
+- `篡改资源实例`
+  - Opens Baidu in an embedded browser.
+  - Automatically intercepts `https://www.baidu.com/` and replaces the Baidu home page with local custom HTML.
+  - The stable implementation uses DevTools Protocol `Fetch.enable`, `Fetch.requestPaused`, and `Fetch.fulfillRequest`.
+  - This mirrors the Volcano resource-tampering demo that returns custom HTML from `GetResourceHandler`, while avoiding heap allocation risks from hand-written FBro ResourceHandler callbacks in pure C++.
+
 ## Important: deps.zip Is Not Included
 
 This repository does not include `deps.zip` or the `third_party/fbro` dependency directory.
@@ -145,6 +158,8 @@ build/服务器/Debug/ServerDemo.exe
 build/服务器Web/Debug/ServerWebDemo.exe
 build/创建URL请求/Debug/URLRequestDemo.exe
 build/JS交互/Debug/JSInteractionDemo.exe
+build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
+build/篡改资源实例/Debug/ResourceTamperDemo.exe
 ```
 
 ## Encoding Rule

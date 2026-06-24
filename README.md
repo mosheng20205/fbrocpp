@@ -112,6 +112,18 @@
     - 点击文本篡改会清空字节集篡改状态，点击字节集篡改会清空文本篡改状态，避免两种篡改状态叠加。
   - 注意：本示例不使用 JShook，也不通过 JS 覆盖 `window.WebSocket` 来伪拦截。
 
+- `VIP指纹测试`
+  - 内嵌浏览器打开 `https://gongjux.com/fingerprint/`。
+  - 提供五个功能按钮：
+    - `指纹刷新`
+    - `获取指纹调用数`
+    - `清空指纹调用数`
+    - `篡改字节集数据`
+    - `重新加载`
+  - 本示例从本地 `.env` 读取 `FBRO_VIP_LICENSE_KEY`，不会把 VIP 授权码写入源码。
+  - 示例使用 FBro VIP 指纹接口设置 User-Agent、Canvas、WebGL、Audio、屏幕、语言、硬件、WebRTC、时区等信息。
+  - `篡改字节集数据` 使用 FBro VIP constant 指纹接口写入固定字节风格标记，并重新加载页面便于观察效果。
+
 ## 重要说明：不提供 deps.zip
 
 本仓库不提供 `deps.zip`，也不提交 `third_party/fbro` 依赖目录。
@@ -180,6 +192,7 @@ build/JS交互/Debug/JSInteractionDemo.exe
 build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
 build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
+build/VIP指纹测试/Debug/VIPFingerprintDemo.exe
 ```
 
 ## 编码约定

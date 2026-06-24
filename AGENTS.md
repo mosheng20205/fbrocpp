@@ -704,7 +704,29 @@ The process stayed responsive, and the full response body is displayed in the UI
 - Description: The `VIPWebsocket拦截测试` sample must follow the Volcano/FBro VIP WebSocket hook path. Do not implement WebSocket interception by overriding `window.WebSocket`, injecting JS hook code, or using JShook-style monkeypatching.
 - Rule: Use `FBroHsVIPControl_EnableWebsocketClientHook(...)` and the `FBroHsInitEvent::OnWebSocketClient*` callbacks. For UI button commands, send messages from the main process to the render process with the FBro socket message channel, then update `FBroDOMWssClient` state or call `FBroHsWSSClient_Send/SendData` in the render-side event context.
 
+### 19. VIP WebSocket Native C++ Pitfalls And Stable Rules
+
+- Type: Pitfall / Experience
+- Source: Conversation 12, Conversation 13
+- Description: The `VIPWebsocket拦截测试` project exposed several differences between Volcano-generated C++ and a pure native C++ implementation. The final stable version was verified with `http://www.websocket-test.com/`.
+- Rules:
+  - Keep the VIP authorization key in local `.env` only. Never hard-code it and never commit it.
+  - The VIP WebSocket callbacks run in the renderer process. Set `browser_subprocess_path` to the current exe so the renderer loads the same `InitEvent` implementation. In subprocess command lines containing `--type=`, initialize FBro and return without creating the main UI.
+  - Event classes used by FBro should use the FBro allocator boundary, for example `FBroMallocManger_New` / `FBroMallocManger_Free`, matching the Volcano `_FBRO_NEW_DELETE_OVERRIDE` idea.
+  - Make `FBroHsVIPControl_EnableWebsocketClientHook(...)` idempotent. Repeated clicks should not repeatedly enable the same hook; reload the page only after the hook state is correct.
+  - Main-window buttons must send commands to the renderer with the FBro process-message channel. Store the captured `FBroDOMWssClient` in the renderer process and call `FBroHsWSSClient_Send(...)` / `FBroHsWSSClient_SendData(...)` there.
+  - Avoid sending log messages from inside renderer WebSocket callbacks through another FBro socket call. This previously risked Debug CRT heap assertions. The stable demo writes renderer callback logs to a file and the browser process polls that log.
+  - In `OnWebSocketClientMessage` and `OnWebSocketClientSend`, copy raw callback data into owned memory such as `std::vector<char>` before parsing, previewing, or logging it. Do not keep callback-owned raw pointers after the callback returns.
+  - If no replacement is needed, set `retdata = nullptr` and return `false`, matching the Volcano wrapper pattern where unchanged data means no replacement.
+  - Returned replacement buffers must be allocated with `new[]`, tracked, and released only from `ClearData(...)` when the pointer is one of the buffers allocated by this project. Do not free FBro-owned input pointers.
+  - `type == 0` was verified as the text frame type on `http://www.websocket-test.com/`. Treat frame type carefully; do not blindly apply byte replacement to every send event.
+  - Text tampering must only replace text frames. For text replacement, return a NUL-terminated UTF-8 buffer and set `size` to `replacement.size() + 1`, matching Volcano `文本到字节集(TRUE)` / `text-to-bytes(TRUE)` behavior. Without this size contract, the server can close the connection after a tampered text send.
+  - Byte-array tampering must only replace binary frames. The test page input box sends text frames, so replacing those text frames with raw bytes such as `01 02 03 04` causes the server to show a disconnected state. The stable behavior is to skip byte tampering for text frames and keep the connection alive.
+  - Text-tamper and byte-tamper state should be mutually exclusive. Clicking `篡改文本数据` clears byte-tamper state; clicking `篡改字节集数据` clears text-tamper state.
+  - Verification target: after enabling the hook, page-side text sending should log `VIP websocket send, type=0`, text tampering should be echoed by the server as the replacement text, and byte tampering on page text sends should log a skip message instead of disconnecting.
+
 ## Revision History
 
+- 2026-06-25: Added detailed VIP WebSocket native C++ pitfalls: renderer-process hook setup, FBro allocator boundaries, callback data copying, return buffer ownership, text-vs-binary frame rules, and stable text/byte tampering behavior.
 - 2026-06-25: Added VIP WebSocket interception rule: always use FBro VIP Hook callbacks and FBro socket process messaging; never use JS hook/JShook monkeypatching for this sample.
 - 2026-06-24: Added "Volcano To Native C++ Migration Lessons" covering callback lifecycle pitfalls, DevTools Network/Fetch alternatives, URLRequest and JS-return workarounds, server echo, shutdown, browser creation, UI hit testing, encoding, dependency packaging, Git secret handling, and debugging strategy.

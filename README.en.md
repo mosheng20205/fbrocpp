@@ -111,6 +111,18 @@ This repository contains C++ examples for using the FBro / FBrowser CEF module w
     - Clicking text tampering clears byte tampering state, and clicking byte tampering clears text tampering state, preventing both modes from stacking.
   - Note: this sample does not use JShook and does not monkeypatch `window.WebSocket` from JavaScript.
 
+- `VIP指纹测试`
+  - Opens `https://gongjux.com/fingerprint/` in an embedded browser.
+  - Provides five feature buttons:
+    - `指纹刷新`
+    - `获取指纹调用数`
+    - `清空指纹调用数`
+    - `篡改字节集数据`
+    - `重新加载`
+  - Reads `FBRO_VIP_LICENSE_KEY` from the local `.env` file and never stores the VIP license key in source code.
+  - Uses FBro VIP fingerprint APIs to configure User-Agent, Canvas, WebGL, Audio, screen, language, hardware, WebRTC, timezone, and related fingerprint fields.
+  - The byte-data tampering button writes fixed byte-style markers through FBro VIP constant fingerprint APIs and reloads the page for inspection.
+
 ## Important: deps.zip Is Not Included
 
 This repository does not include `deps.zip` or the `third_party/fbro` dependency directory.
@@ -179,6 +191,7 @@ build/JS交互/Debug/JSInteractionDemo.exe
 build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
 build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
+build/VIP指纹测试/Debug/VIPFingerprintDemo.exe
 ```
 
 ## Encoding Rule

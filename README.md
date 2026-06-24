@@ -124,6 +124,13 @@
   - 示例使用 FBro VIP 指纹接口设置 User-Agent、Canvas、WebGL、Audio、屏幕、语言、硬件、WebRTC、时区等信息。
   - `篡改字节集数据` 使用 FBro VIP constant 指纹接口写入固定字节风格标记，并重新加载页面便于观察效果。
 
+- `VIP高级功能测试`
+  - 内嵌浏览器打开百度。
+  - 参考火山“VIP高级功能测试”示例，提供 DevTools 消息、VIP 截图、触摸/键盘/鼠标事件、Runtime JS、VIP 过滤器、VIP DOM 操作等按钮。
+  - 本示例从本地 `.env` 读取 `FBRO_VIP_LICENSE_KEY`，不会把 VIP 授权码写入源码。
+  - DevTools / Runtime / DOM 返回结果统一输出到窗口日志框和 exe 旁边的 `vip-advanced-feature-demo.log`。
+  - 需要节点 ID 的 DOM 按钮会优先使用最近一次 `枚举DOM_同步`、`查询节点选择器_同步` 或 `查询全部节点选择器_同步` 记录到的节点 ID。
+
 ## 重要说明：不提供 deps.zip
 
 本仓库不提供 `deps.zip`，也不提交 `third_party/fbro` 依赖目录。
@@ -193,6 +200,7 @@ build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
 build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
 build/VIP指纹测试/Debug/VIPFingerprintDemo.exe
+build/VIP高级功能测试/Debug/VIPAdvancedFeatureDemo.exe
 ```
 
 ## 编码约定

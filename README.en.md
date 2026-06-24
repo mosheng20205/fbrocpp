@@ -123,6 +123,13 @@ This repository contains C++ examples for using the FBro / FBrowser CEF module w
   - Uses FBro VIP fingerprint APIs to configure User-Agent, Canvas, WebGL, Audio, screen, language, hardware, WebRTC, timezone, and related fingerprint fields.
   - The byte-data tampering button writes fixed byte-style markers through FBro VIP constant fingerprint APIs and reloads the page for inspection.
 
+- `VIP高级功能测试`
+  - Opens Baidu in an embedded browser.
+  - Follows the Volcano `VIP高级功能测试` sample and provides buttons for DevTools messages, VIP screenshot, touch/keyboard/mouse events, Runtime JavaScript, VIP filters, and VIP DOM operations.
+  - Reads `FBRO_VIP_LICENSE_KEY` from the local `.env` file and never stores the VIP license key in source code.
+  - DevTools / Runtime / DOM callback results are written to the window log box and to `vip-advanced-feature-demo.log` beside the executable.
+  - DOM buttons that need a node id use the latest node id captured by `枚举DOM_同步`, `查询节点选择器_同步`, or `查询全部节点选择器_同步`.
+
 ## Important: deps.zip Is Not Included
 
 This repository does not include `deps.zip` or the `third_party/fbro` dependency directory.
@@ -192,6 +199,7 @@ build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
 build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
 build/VIP指纹测试/Debug/VIPFingerprintDemo.exe
+build/VIP高级功能测试/Debug/VIPAdvancedFeatureDemo.exe
 ```
 
 ## Encoding Rule

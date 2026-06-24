@@ -93,6 +93,24 @@ This repository contains C++ examples for using the FBro / FBrowser CEF module w
   - The stable implementation uses DevTools Protocol `Fetch.enable`, `Fetch.requestPaused`, and `Fetch.fulfillRequest`.
   - This mirrors the Volcano resource-tampering demo that returns custom HTML from `GetResourceHandler`, while avoiding heap allocation risks from hand-written FBro ResourceHandler callbacks in pure C++.
 
+- `VIPWebsocket拦截测试`
+  - Opens `http://www.websocket-test.com/` in an embedded browser.
+  - Provides seven feature buttons:
+    - `启用websocket拦截`
+    - `篡改链接`
+    - `篡改文本数据`
+    - `篡改字节集数据`
+    - `发送文本数据`
+    - `发送字节集数据`
+    - `清空全部篡改数据`
+  - This sample strictly uses the FBro VIP Hook path: `FBroHsVIPControl_EnableWebsocketClientHook(...)` and `FBroHsInitEvent::OnWebSocketClient*` callbacks.
+  - Main-window buttons send commands to the render process through the FBro process-message channel; the render-side event stores `FBroDOMWssClient` and performs tampering or sending there.
+  - Verified stable behavior:
+    - `篡改文本数据` only changes text frames. The returned buffer size follows Volcano's `text-to-bytes(TRUE)` behavior and keeps the trailing `NUL`, so the server can echo the changed text normally.
+    - `篡改字节集数据` only changes binary frames. The input box on `http://www.websocket-test.com/` sends text frames; forcing those frames to raw bytes such as `01 02 03 04` makes the server close the connection. This sample skips byte tampering for text frames to keep the connection alive.
+    - Clicking text tampering clears byte tampering state, and clicking byte tampering clears text tampering state, preventing both modes from stacking.
+  - Note: this sample does not use JShook and does not monkeypatch `window.WebSocket` from JavaScript.
+
 ## Important: deps.zip Is Not Included
 
 This repository does not include `deps.zip` or the `third_party/fbro` dependency directory.
@@ -160,6 +178,7 @@ build/创建URL请求/Debug/URLRequestDemo.exe
 build/JS交互/Debug/JSInteractionDemo.exe
 build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
+build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
 ```
 
 ## Encoding Rule

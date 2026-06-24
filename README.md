@@ -94,6 +94,24 @@
   - 当前稳定实现使用 DevTools Protocol 的 `Fetch.enable` / `Fetch.requestPaused` / `Fetch.fulfillRequest`。
   - 这对应火山“资源篡改实例”中通过 `GetResourceHandler` 返回自定义 HTML 的效果，但避免纯 C++ 手写 FBro ResourceHandler 回调导致的堆分配风险。
 
+- `VIPWebsocket拦截测试`
+  - 内嵌浏览器打开 `http://www.websocket-test.com/`。
+  - 提供七个功能按钮：
+    - `启用websocket拦截`
+    - `篡改链接`
+    - `篡改文本数据`
+    - `篡改字节集数据`
+    - `发送文本数据`
+    - `发送字节集数据`
+    - `清空全部篡改数据`
+  - 本示例严格使用 FBro VIP Hook：`FBroHsVIPControl_EnableWebsocketClientHook(...)` 和 `FBroHsInitEvent::OnWebSocketClient*` 回调。
+  - 主窗口按钮通过 FBro 进程消息把命令发到渲染进程，由渲染侧保存 `FBroDOMWssClient` 并执行篡改或发送。
+  - 已验证的稳定处理：
+    - `篡改文本数据` 只处理文本帧，返回缓冲大小按火山 `文本到字节集(TRUE)` 行为保留结尾 `NUL`，服务端可正常回显篡改后的文本。
+    - `篡改字节集数据` 只处理二进制帧。`http://www.websocket-test.com/` 页面输入框发送的是文本帧，如果强行替换为 `01 02 03 04` 这类字节集，服务端会断开连接；当前示例会跳过文本帧上的字节集篡改并保持连接。
+    - 点击文本篡改会清空字节集篡改状态，点击字节集篡改会清空文本篡改状态，避免两种篡改状态叠加。
+  - 注意：本示例不使用 JShook，也不通过 JS 覆盖 `window.WebSocket` 来伪拦截。
+
 ## 重要说明：不提供 deps.zip
 
 本仓库不提供 `deps.zip`，也不提交 `third_party/fbro` 依赖目录。
@@ -161,6 +179,7 @@ build/创建URL请求/Debug/URLRequestDemo.exe
 build/JS交互/Debug/JSInteractionDemo.exe
 build/拦截获取简单示例/Debug/ResourceInterceptDemo.exe
 build/篡改资源实例/Debug/ResourceTamperDemo.exe
+build/VIPWebsocket拦截测试/Debug/VIPWebsocketInterceptDemo.exe
 ```
 
 ## 编码约定

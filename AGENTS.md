@@ -697,6 +697,14 @@ The process stayed responsive, and the full response body is displayed in the UI
 - Description: README files should document stable implementation choices and known unsafe Volcano callback translations. When a README references a new project, the project source must be committed in the same change.
 - Rule: Keep Chinese and English README files in sync, and update this `AGENTS.md` when a new migration pitfall is discovered.
 
+### 18. VIP WebSocket Interception Must Use FBro VIP Hook
+
+- Type: Rule
+- Source: Conversation 12
+- Description: The `VIPWebsocket拦截测试` sample must follow the Volcano/FBro VIP WebSocket hook path. Do not implement WebSocket interception by overriding `window.WebSocket`, injecting JS hook code, or using JShook-style monkeypatching.
+- Rule: Use `FBroHsVIPControl_EnableWebsocketClientHook(...)` and the `FBroHsInitEvent::OnWebSocketClient*` callbacks. For UI button commands, send messages from the main process to the render process with the FBro socket message channel, then update `FBroDOMWssClient` state or call `FBroHsWSSClient_Send/SendData` in the render-side event context.
+
 ## Revision History
 
+- 2026-06-25: Added VIP WebSocket interception rule: always use FBro VIP Hook callbacks and FBro socket process messaging; never use JS hook/JShook monkeypatching for this sample.
 - 2026-06-24: Added "Volcano To Native C++ Migration Lessons" covering callback lifecycle pitfalls, DevTools Network/Fetch alternatives, URLRequest and JS-return workarounds, server echo, shutdown, browser creation, UI hit testing, encoding, dependency packaging, Git secret handling, and debugging strategy.

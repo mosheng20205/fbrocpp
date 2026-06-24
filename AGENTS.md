@@ -558,3 +558,145 @@ mime=text/html
 ```
 
 The process stayed responsive, and the full response body is displayed in the UI/log.
+
+## Volcano To Native C++ Migration Lessons
+
+**Source scope:** These notes summarize the working conclusions from the FBroC++ migration conversations and sample projects. Conversation numbers are local labels for the related task groups in this thread.
+
+### 1. Generated Volcano C++ Is Not Plain C++
+
+- Type: Pitfall
+- Source: Conversation 1, Conversation 2, Conversation 7, Conversation 8
+- Description: Volcano-generated C++ callback classes commonly inherit both `CVolObject` and an FBro callback/event interface, and also use macros such as `DECLARE_VOL_CLASS`. Pure C++ classes that only inherit the visible FBro interface are not equivalent.
+- Rule: Do not directly copy Volcano callback classes into native C++ unless the required Volcano runtime object model and allocation lifecycle are also present.
+
+### 2. Callback Allocation Boundaries Are Fragile
+
+- Type: Pitfall
+- Source: Conversation 2, Conversation 7, Conversation 8, Conversation 9, Conversation 10
+- Description: Hand-written native C++ callbacks for `FBroHsJsCallback`, `FBroHsURLRequestClient`, `FBroHsResponseFilter`, `CefResponseFilter`, and FBro resource callback paths triggered Debug CRT errors such as `_CrtIsValidHeapPointer(block)`, `abort() has been called`, or heap corruption.
+- Rule: Treat FBro callback-owned objects as crossing a sensitive allocation boundary. Prefer stable native CEF or DevTools alternatives when a pure C++ callback causes CRT heap assertions.
+
+### 3. Prefer DevTools For Resource Capture
+
+- Type: Experience
+- Source: Conversation 9
+- Description: The resource capture sample first attempted `GetResourceResponseFilter` / `CefResponseFilter`, but it triggered Debug CRT heap assertions in the native C++ environment.
+- Stable solution: Use DevTools Protocol:
+  - `Network.responseReceived`
+  - `Network.loadingFinished`
+  - `Network.getResponseBody`
+- Rule: For pure C++ FBro demos that only need to observe and save response bodies, use DevTools Network capture instead of FBro `ResponseFilter`.
+
+### 4. Preserve Resource File Extensions From MIME And URL
+
+- Type: Experience
+- Source: Conversation 9
+- Description: Captured resources initially saved as `.bin` because the implementation did not keep `response.mimeType`. The fix was to store `requestId -> {url, mimeType}` and infer the extension from MIME first, then URL suffix.
+- Rule: When saving intercepted resources, keep both URL and MIME metadata. Avoid duplicate suffixes such as `.png.png` by trimming the URL suffix before appending the final extension.
+
+### 5. Prefer DevTools Fetch For Resource Tampering
+
+- Type: Experience
+- Source: Conversation 10
+- Description: The Volcano resource tampering demo used `GetResourceHandler` to replace `https://www.baidu.com/` with custom HTML. In native C++, reproducing that callback path risks the same allocation/lifecycle problems as other FBro callback models.
+- Stable solution: Use DevTools Protocol:
+  - `Fetch.enable`
+  - `Fetch.requestPaused`
+  - `Fetch.continueRequest`
+  - `Fetch.fulfillRequest`
+- Rule: For pure C++ demos that need to replace a document or resource body, prefer DevTools Fetch interception and only fulfill the specific target request. Continue all other requests.
+
+### 6. Attach Interceptors Before Loading The Target Page
+
+- Type: Experience
+- Source: Conversation 9, Conversation 10
+- Description: Loading Baidu immediately during browser creation can miss early network events or enter unstable resource callback paths.
+- Rule: Create the embedded browser with `about:blank`, attach DevTools observers, then load the target URL from the main thread with `FBroHsBrowserFrame_LoadURL(...)`.
+
+### 7. Use Native CEF For URL Requests
+
+- Type: Experience
+- Source: Conversation 8
+- Description: Native C++ attempts using `FBroHsURLRequest_Create` or frame URL request creation with hand-written clients caused Debug CRT heap assertions.
+- Stable solution:
+  - Global request: `CefURLRequest::Create(request, client, nullptr)`
+  - Browser-context request: get the current browser request context, then call `CefURLRequest::Create(request, client, context)`
+- Rule: Use CEF `CefURLRequest` for native C++ URL request demos unless the full Volcano callback runtime is available.
+
+### 8. JS Return Values Need A Native CEF Workaround
+
+- Type: Experience
+- Source: Conversation 7
+- Description: Volcano can use `FBroHsBrowserFrame_ExecuteJavaScriptToHasReturn` with a Volcano callback class. Pure C++ reproduction caused Debug CRT abort even with `type_ = JsCallbackType` and FBro allocator hooks.
+- Stable solution: Execute JS with native CEF, write the result into a page marker, and read it back through a stable CEF path.
+- Rule: Keep Volcano-style JS callback code only as research unless the full Volcano object runtime is introduced.
+
+### 9. Server WebSocket Echo Must Be Deferred
+
+- Type: Pitfall
+- Source: Conversation 3
+- Description: Sending WebSocket echo data synchronously inside `OnWebSocketMessage(...)` caused heap corruption.
+- Stable solution: Copy the message into owned memory, queue it, post a Win32 message to the main window, then call `FBroHsServer_SendWebSocketMessage(...)` on the main thread.
+- Rule: In FBro native C++ server demos, callbacks should capture data and return quickly. Perform send/UI/navigation follow-up work from the main thread.
+
+### 10. Shutdown Must Follow A Two-Stage Model
+
+- Type: Experience
+- Source: Conversation 4
+- Description: Direct `WM_CLOSE -> DestroyWindow` and normal `FBroShutdown(TRUE)` caused subprocess cleanup problems.
+- Stable solution: Hide the window, request browser/server close, call `FBroShutdown(FALSE)` once, wait for callbacks such as `OnBeforeClose` / `OnServerDestroyed`, then destroy the window. Keep a short fallback timer.
+- Rule: New FBro C++ projects must copy the existing `RequestAppClose`, `MaybeDestroyAfterClose`, and `HasLiveResources` pattern.
+
+### 11. Embedded And Popup Browser Creation Use Different Handles
+
+- Type: Experience
+- Source: Conversation 5
+- Description: Embedded FBro browser creation needs a real child control `HWND` as `E_WINDOWS_INFO.parent_window`. Native CEF popup creation should use `CefWindowInfo::SetAsPopup(nullptr, ...)`.
+- Rule: Do not create an extra top-level Win32 host for the native popup demo. Use parent handle `0` / `nullptr` so CEF creates its own popup window.
+
+### 12. Frameless Browser UI Needs Win32 Hit Testing
+
+- Type: Experience
+- Source: Conversation 6
+- Description: Dragging, double-click maximize, close/maximize buttons, and resize borders in the C++ browser UI required explicit Win32 handling. Browser content can consume mouse messages and break naive drag logic.
+- Rule: For frameless UI demos, implement title-bar drag/maximize through Win32 hit testing or carefully placed non-browser host areas, and preserve resize hit zones at window edges.
+
+### 13. Keep Chinese Text Encoding Stable
+
+- Type: Pitfall
+- Source: Conversation 6, Conversation 7, Conversation 10
+- Description: Direct Chinese text in C++ source or embedded HTML can become garbled under MSVC code page 936, and can even break string literals.
+- Rule: Prefer Unicode escapes for C++ wide strings and HTML entities for embedded HTML. Keep source files encoding-stable and avoid rewriting Volcano `.vprj` / `.wsv` files away from UTF-16LE.
+
+### 14. Dependency And Runtime Packaging Rules
+
+- Type: Experience
+- Source: Conversation 1, Conversation 11
+- Description: Projects should use the local dependency copy instead of the original `T:\...` installation path. Runtime files from `CEFLib64` must be staged beside the exe.
+- Rule: Use `third_party/fbro` or the local `deps` copy for headers/libs/runtime. Do not commit large FBro runtime dependencies or `deps.zip`; tell users to obtain them from the official FBro package.
+
+### 15. Git And Secret Handling
+
+- Type: Experience
+- Source: Conversation 1, Conversation 11
+- Description: VIP authorization keys must stay in local `.env` and must not be committed. Large runtime files such as `libcef.dll` exceed normal GitHub limits and should not be uploaded as ordinary repo files.
+- Rule: Keep `.env` ignored, scan for license keys before committing, and avoid committing `third_party/fbro`, build outputs, cache directories, or captured resources.
+
+### 16. Debugging Strategy
+
+- Type: Experience
+- Source: Conversation 2, Conversation 3, Conversation 7, Conversation 8, Conversation 9, Conversation 10
+- Description: The most reliable debugging method was incremental reduction: start with browser/server creation only, add one callback at a time, and test after each addition. When Debug CRT errors appear, suspect callback lifetime/allocation boundary first.
+- Rule: Before expanding a native C++ FBro sample, make a minimal stable version, then restore behavior step by step. Prefer logs and short launch tests for each step.
+
+### 17. Documentation And Collaboration Rule
+
+- Type: Experience
+- Source: Conversation 11
+- Description: README files should document stable implementation choices and known unsafe Volcano callback translations. When a README references a new project, the project source must be committed in the same change.
+- Rule: Keep Chinese and English README files in sync, and update this `AGENTS.md` when a new migration pitfall is discovered.
+
+## Revision History
+
+- 2026-06-24: Added "Volcano To Native C++ Migration Lessons" covering callback lifecycle pitfalls, DevTools Network/Fetch alternatives, URLRequest and JS-return workarounds, server echo, shutdown, browser creation, UI hit testing, encoding, dependency packaging, Git secret handling, and debugging strategy.
